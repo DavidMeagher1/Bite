@@ -30,7 +30,7 @@ test "WordInfo size is 1 byte" {
 }
 
 pub const Word = struct {
-    link: Type.Address,
+    link: Type.WordIndex,
     info: WordInfo,
     name: []const u8,
     code_index: Type.CodeIndex,
@@ -38,12 +38,11 @@ pub const Word = struct {
 };
 
 data: ArrayListUnmanaged(u8) = .empty,
-second_last_word: ?Type.Address = null,
-last_word: ?Type.Address = null,
-here: Type.Address = 0,
+last_word: ?Type.WordIndex = null,
+here: Type.WordIndex = 0,
 
 pub const LINK_OFFSET: usize = 0;
-pub const INFO_OFFSET: usize = LINK_OFFSET + @sizeOf(Type.Address);
+pub const INFO_OFFSET: usize = LINK_OFFSET + @sizeOf(Type.WordIndex);
 pub const NAME_OFFSET: usize = INFO_OFFSET + @sizeOf(WordInfo);
 pub const CODE_SIZE: usize = @sizeOf(Type.CodeIndex);
 
@@ -54,45 +53,39 @@ pub fn deinit(self: *Dictionary, gpa: Allocator) void {
 }
 
 pub fn startWord(self: *Dictionary, gpa: Allocator) !void {
-    if (self.last_word) |last| {
-        const written = try self.addLink(gpa, last);
-        self.second_last_word = self.last_word;
-        self.last_word = self.here;
-        self.here += written;
-    } else {
-        const written = try self.addLink(gpa, 0);
-        self.last_word = self.here;
-        self.here += written;
-    }
+    const link = self.last_word orelse 0;
+    const written = try self.addLink(gpa, link);
+    self.last_word = self.here;
+    self.here += written;
 }
 
-pub fn addLink(self: *Dictionary, gpa: Allocator, link: Type.Address) !usize {
-    const link_bytes = mem.asBytes(&link);
-    try self.data.appendSlice(gpa, link_bytes);
-    return @sizeOf(Type.Address);
+pub fn addLink(self: *Dictionary, gpa: Allocator, link: Type.WordIndex) !usize {
+    const link_bytes = mem.toBytes(link);
+    try self.data.appendSlice(gpa, &link_bytes);
+    return @sizeOf(Type.WordIndex);
 }
 
-pub fn getLink(self: *Dictionary, address: Type.Address) ?*Type.Address {
-    if (address + @sizeOf(Type.Address) > self.data.items.len) {
+pub fn getLink(self: *Dictionary, widx: Type.WordIndex) ?Type.WordIndex {
+    if (widx + @sizeOf(Type.WordIndex) > self.data.items.len) {
         return null;
     }
-    const link_bytes = self.data.items[address .. address + @sizeOf(Type.Address)];
-    const link: *Type.Address = mem.bytesAsValue(Type.Address, link_bytes);
+    const link_bytes = self.data.items[widx .. widx + @sizeOf(Type.WordIndex)];
+    const link: Type.WordIndex = mem.bytesToValue(Type.WordIndex, link_bytes);
     return link;
 }
 
 pub fn addWordInfo(self: *Dictionary, gpa: Allocator, info: WordInfo) !usize {
-    const info_bytes = mem.asBytes(&info);
-    try self.data.appendSlice(gpa, info_bytes);
+    const info_bytes = mem.toBytes(info);
+    try self.data.appendSlice(gpa, &info_bytes);
     return @sizeOf(WordInfo);
 }
 
-pub fn getWordInfo(self: *Dictionary, address: Type.Address) ?*WordInfo {
-    if (address + @sizeOf(WordInfo) > self.data.items.len) {
+pub fn getWordInfo(self: *Dictionary, widx: Type.WordIndex) ?WordInfo {
+    if ((widx + NAME_OFFSET) > self.data.items.len) {
         return null;
     }
-    const info_bytes = self.data.items[address .. address + @sizeOf(WordInfo)];
-    const info: *WordInfo = mem.bytesAsValue(WordInfo, info_bytes);
+    const info_bytes = self.data.items[widx + INFO_OFFSET .. widx + NAME_OFFSET];
+    const info: WordInfo = mem.bytesToValue(WordInfo, info_bytes);
     return info;
 }
 
@@ -102,34 +95,34 @@ pub fn addName(self: *Dictionary, gpa: Allocator, name: []const u8) !usize {
 }
 
 pub fn addCode(self: *Dictionary, gpa: Allocator, code_index: Type.CodeIndex) !usize {
-    const code_bytes = mem.asBytes(&code_index);
-    try self.data.appendSlice(gpa, code_bytes);
+    const code_bytes = mem.toBytes(code_index);
+    try self.data.appendSlice(gpa, &code_bytes);
     return @sizeOf(Type.CodeIndex);
 }
 
-pub fn getCode(self: *Dictionary, address: Type.Address) ?Type.CodeIndex {
-    if (address + @sizeOf(Type.CodeIndex) > self.data.items.len) {
+pub fn getCode(self: *Dictionary, widx: Type.WordIndex) ?Type.CodeIndex {
+    const winfo = self.getWordInfo(widx) orelse return null;
+    const code_offset = winfo.getCodeOffset();
+    if (widx + code_offset + @sizeOf(Type.CodeIndex) > self.data.items.len) {
         return null;
     }
-    const code_bytes = self.data.items[address .. address + @sizeOf(Type.CodeIndex)];
-    const code_index: *Type.CodeIndex = mem.bytesAsValue(Type.CodeIndex, code_bytes);
-    return code_index.*;
+    const code_index: Type.CodeIndex = mem.bytesToValue(Type.CodeIndex, self.data.items[widx + code_offset .. widx + code_offset + @sizeOf(Type.CodeIndex)]);
+    return code_index;
 }
 
 pub fn addData(self: *Dictionary, gpa: Allocator, data: Type.CodeIndex) !usize {
-    const data_bytes = mem.asBytes(&data);
+    const data_bytes = mem.toBytes(data);
     try self.data.appendSlice(gpa, data_bytes);
     return @sizeOf(Type.CodeIndex);
 }
 
-pub fn findWord(self: *Dictionary, name: []const u8) ?Type.Address {
+pub fn findWord(self: *Dictionary, name: []const u8) ?Type.WordIndex {
     var current = self.last_word;
     while (current) |addr| {
-        const info_bytes = self.data.items[addr + INFO_OFFSET .. addr + INFO_OFFSET + @sizeOf(WordInfo)];
-        const info = mem.bytesToValue(WordInfo, info_bytes);
+        const info = self.getWordInfo(addr) orelse break;
         if (info.name_len != name.len) {
-            const link_ptr = self.getLink(addr) orelse return null;
-            current = link_ptr.*;
+            const link = self.getLink(addr) orelse break;
+            current = link;
             continue;
         }
         const name_start = addr + NAME_OFFSET;
@@ -138,15 +131,18 @@ pub fn findWord(self: *Dictionary, name: []const u8) ?Type.Address {
         if (mem.eql(u8, word_name, name)) {
             return addr;
         }
-        const link_ptr = self.getLink(addr) orelse return null;
-        current = link_ptr.*;
+        if (addr == 0) {
+            break;
+        }
+        const link = self.getLink(addr) orelse return null;
+        current = link;
     }
     return null;
 }
 
 pub fn getWord(self: *Dictionary, name: []const u8) ?Word {
     var current = self.last_word;
-    var last_addr: ?Type.Address = null;
+    var last_addr: ?Type.WordIndex = null;
     while (current) |addr| {
         last_addr = current;
         const info_bytes = self.data.items[addr + INFO_OFFSET .. addr + INFO_OFFSET + @sizeOf(WordInfo)];
@@ -163,7 +159,7 @@ pub fn getWord(self: *Dictionary, name: []const u8) ?Word {
             const code_index_bytes = self.data.items[name_end .. name_end + CODE_SIZE];
             const code_index: Type.CodeIndex = mem.bytesToValue(Type.CodeIndex, code_index_bytes);
             const data_start = name_end + CODE_SIZE;
-            var data_end: Type.Address = 0;
+            var data_end: Type.WordIndex = 0;
             if (addr == self.last_word) {
                 data_end = self.data.items.len;
             } else {
@@ -183,10 +179,4 @@ pub fn getWord(self: *Dictionary, name: []const u8) ?Word {
         current = link_ptr.*;
     }
     return null;
-}
-
-pub fn setLastFlags(self: *Dictionary, flags: WordFlags) void {
-    const address = self.last_word orelse return;
-    const info = self.getWordInfo(address) orelse return;
-    info.flags = flags;
 }
