@@ -9,28 +9,27 @@ const Lexer = @import("lexer.zig");
 const Stack = @import("stack.zig");
 const primitives = @import("primitives.zig");
 
-const Mode = enum {
+pub const Mode = enum {
     interpreting,
     compiling,
 };
 
-const Error = error{
+pub const Error = error{
     InvalidAddress,
     EndOfCode,
-};
+    UnknownWord,
+} || Stack.Error || Dictionary.Error;
 
-const InterpreterOptions = struct {
+pub const InterpreterOptions = struct {
     stack_size: ?usize = null,
 };
-
-pub const sentinal_return_address: Type.Address = std.math.maxInt(Type.Address);
 
 gpa: Allocator,
 inner: InnerInterpreter = .{},
 lexer: Lexer = undefined,
 IP: Type.Address = 0,
+C: Type.CodeIndex = 0,
 dictionary: Dictionary = .{},
-code_address_list: ArrayListUnmanaged(Type.Address) = .empty,
 mode: Mode = .interpreting,
 data_stack: Stack = .{},
 return_stack: Stack = .{},
@@ -42,26 +41,18 @@ const InnerInterpreter = struct {
     // Executes a word at the given address
     halted: bool = false,
 
-    pub fn fetch(outer: *Interpreter, cidx: Type.CodeIndex) ?Type.Instruction {
-        if (cidx >= outer.code_address_list.items.len) {
-            return null;
-        }
-        const instr_addr: Type.Address = outer.code_address_list.items[cidx];
-        const instr: Type.Instruction = @ptrFromInt(instr_addr);
-        return instr;
-    }
-
     pub fn exec(outer: *Interpreter, cidx: Type.CodeIndex) !void {
         const instr = InnerInterpreter.fetch(outer, cidx) orelse return error.InvalidAddress;
         try instr(outer);
     }
 
     pub fn step(outer: *Interpreter) !bool {
-        const widx: Type.WordIndex = outer.IP;
-        const info = outer.dictionary.getWordInfo(widx) orelse return error.InvalidAddress;
-        const cidx = outer.dictionary.getCode(widx) orelse return error.InvalidAddress;
-        outer.IP += info.getDataOffset();
-        try InnerInterpreter.exec(outer, cidx);
+        // assume current IP points to a CodeIndex
+        const func_bytes = outer.dictionary.data.items[outer.IP .. outer.IP + @sizeOf(Type.CodeIndex)];
+        const func_addr: Type.CodeIndex = std.mem.bytesToValue(Type.CodeIndex, func_bytes);
+        const func:Type.Instruction = @ptrFromInt(func_addr);
+        outer.IP += @sizeOf(Type.Address); // advance past the address
+        try func(outer);
         return !outer.inner.halted;
     }
 
@@ -85,14 +76,12 @@ pub fn init(gpa: Allocator, options: InterpreterOptions) !Interpreter {
         .data_stack = data_stack,
         .return_stack = return_stack,
     };
-    try result.code_address_list.appendSlice(gpa, &[_]Type.Address{ @intFromPtr(&primitives.docol), @intFromPtr(&primitives.exit) }); // add docol, and next addresses as initial code
     try primitives.register_defaults(&result);
     return result;
 }
 
 pub fn deinit(self: *Interpreter) void {
     self.dictionary.deinit(self.gpa);
-    self.code_address_list.deinit(self.gpa);
     self.data_stack.deinit(self.gpa);
     self.return_stack.deinit(self.gpa);
     self.IP = 0;
@@ -109,18 +98,34 @@ pub fn step(self: *Interpreter) !void {
         .eoi => return error.EndOfCode,
         .text => |text| {
             // Handle text token
-            if (self.mode == .interpreting) {
-                // Look up the word in the dictionary and execute it
-                const widx = self.dictionary.findWord(text);
-                if (widx) |idx| {
-                    self.IP = idx;
-                    try self.return_stack.push(self.gpa, sentinal_return_address); // push a sentinel return address
+            const widx = self.dictionary.findWord(text);
+            if (widx) |idx| {
+                const info = self.dictionary.getWordInfo(idx) orelse return error.InvalidAddress;
+                if (self.mode == .interpreting or info.flags.immediate) {
+                    self.IP = idx + info.getCodeOffset();
+                    const addr_bytes = self.dictionary.data.items[self.IP .. self.IP + @sizeOf(Type.Address)];
+                    const addr: Type.CodeIndex = std.mem.bytesToValue(Type.CodeIndex, addr_bytes);
+                    if (addr == @intFromPtr(&primitives.docol)) {
+                        // we are executing a user-defined word
+                        self.IP += @sizeOf(Type.Address); // advance past docol
+                    }
+                    try self.return_stack.push(self.gpa, Type.Constants.sentinel_return_address); // push sentinel
                     try InnerInterpreter.run(self);
                 } else {
-                    return error.InvalidAddress;
+                    const cfa = idx + info.getCodeOffset();
+                    const addr_bytes = self.dictionary.data.items[cfa .. cfa + @sizeOf(Type.Address)];
+                    const addr: Type.CodeIndex = std.mem.bytesToValue(Type.CodeIndex, addr_bytes);
+                    if (addr == @intFromPtr(&primitives.docol)){
+                        // we are compiling a user-defined word
+                        self.dictionary.here += try self.dictionary.addCode(self.gpa, @intFromPtr(&primitives.execute));
+                        self.dictionary.here += try self.dictionary.addData(self.gpa, cfa + @sizeOf(Type.Address));
+                    } else {
+                        // we are compiling a primitive
+                        self.dictionary.here += try self.dictionary.addCode(self.gpa, addr);
+                    }
                 }
             } else {
-                // Compile the word into the current definition
+                return error.UnknownWord;
             }
         },
         .s_int, .u_int => {
@@ -136,31 +141,49 @@ pub fn step(self: *Interpreter) !void {
                     else => unreachable,
                 }
             } else {
-                // Compile a literal instruction followed by the value
+                // Compile a LITERAL instruction followed by the value
+                self.dictionary.here += try self.dictionary.addData(self.gpa, @intFromPtr(&primitives.literal)); // compile LITERAL instruction
+                switch (value) {
+                    .s_int => |v_int| {
+                        self.dictionary.here += try self.dictionary.addData(self.gpa, @bitCast(v_int));
+                    },
+                    .u_int => |v_int| {
+                        self.dictionary.here += try self.dictionary.addData(self.gpa, @bitCast(v_int));
+                    },
+                    else => unreachable,
+                }
             }
         },
     }
 }
 
-pub fn getCodeIndex(self: *Interpreter, address: Type.Address) ?Type.CodeIndex {
-    return mem.indexOf(Type.Address, self.code_address_list.items, &[_]Type.Address{address});
+pub fn run(self: *Interpreter) !void {
+    while (true) {
+        self.step() catch |err| {
+            if (err == error.EndOfCode) break;
+            return err;
+        };
+    }
+    return;
 }
 
 pub fn register_primitive(self: *Interpreter, name: []const u8, func: Type.Instruction, is_immediate: bool) !void {
+    // inaccessable primitive
+    // accessable primtive
     try self.dictionary.startWord(self.gpa);
-    self.dictionary.here += try self.dictionary.addWordInfo(self.gpa, .{
+    const info = Dictionary.WordInfo{
         .flags = .{
             .immediate = is_immediate,
         },
         .name_len = @truncate(name.len),
-    });
+    };
+    self.dictionary.here += try self.dictionary.addWordInfo(self.gpa, info);
     self.dictionary.here += try self.dictionary.addName(self.gpa, name[0..@as(u5, @truncate(name.len))]);
-    const code_idx = self.code_address_list.items.len;
-    self.dictionary.here += try self.dictionary.addCode(self.gpa, code_idx);
-    try self.code_address_list.append(self.gpa, @intFromPtr(func));
+    self.dictionary.here += try self.dictionary.addCode(self.gpa, @intFromPtr(func));
+    self.dictionary.here += try self.dictionary.addData(self.gpa, @intFromPtr(&primitives.doexit));
 }
 
-test "simple test" {
+test "unknown word" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -168,14 +191,105 @@ test "simple test" {
     var interpreter = try Interpreter.init(allocator, .{});
     defer interpreter.deinit();
 
-    const code = "10 14 + .";
-    try interpreter.load(code);
-    while (true) {
-        interpreter.step() catch |err| {
-            if (err == error.EndOfCode) break;
-            return err;
-        };
-    }
+    try interpreter.load("FOOBAR");
+    const result = interpreter.run();
+    try std.testing.expectEqual(result, error.UnknownWord);
+}
 
-    // Further tests would go here
+test "simple addition" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var interpreter = try Interpreter.init(allocator, .{});
+    defer interpreter.deinit();
+
+    try interpreter.load("10 14 +");
+    try interpreter.run();
+    const top = try interpreter.data_stack.pop();
+    try std.testing.expectEqual(24, top);
+}
+
+test "word definition" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var interpreter = try Interpreter.init(allocator, .{});
+    defer interpreter.deinit();
+
+    try interpreter.load(": add-2 2 + ; 10 add-2");
+    try interpreter.run();
+    const top = try interpreter.data_stack.pop();
+    try std.testing.expectEqual(12, top);
+}
+
+test "literal in a word" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var interpreter = try Interpreter.init(allocator, .{});
+    defer interpreter.deinit();
+
+    try interpreter.load(": foo LITERAL 99 ; foo");
+    try interpreter.run();
+    const top = try interpreter.data_stack.pop();
+    try std.testing.expectEqual(99, top);
+}
+
+test "word in a word" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var interpreter = try Interpreter.init(allocator, .{});
+    defer interpreter.deinit();
+
+    try interpreter.load(": foo LITERAL 10 ; : bar foo  ; bar");
+    try interpreter.run();
+    const top = try interpreter.data_stack.pop();
+    try std.testing.expectEqual(10, top);
+}
+
+test "create and does" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var interpreter = try Interpreter.init(allocator, .{});
+    defer interpreter.deinit();
+
+    try interpreter.load(": test CREATE DOES> 10 ; test foo foo");
+    try interpreter.run();
+    const top = try interpreter.data_stack.pop();
+    try std.testing.expectEqual( 10, top);
+}
+
+test "drop test"{
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var interpreter = try Interpreter.init(allocator, .{});
+    defer interpreter.deinit();
+
+    try interpreter.load("42 DROP");
+    try interpreter.run();
+    const sp = interpreter.data_stack.sp();
+    try std.testing.expectEqual(0, sp);
+}
+
+test "Constant" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var interpreter = try Interpreter.init(allocator, .{});
+    defer interpreter.deinit();
+
+    try interpreter.load(": CONSTANT CREATE , DOES> @ ; 42 CONSTANT foo foo");
+    try interpreter.run();
+    const top = try interpreter.data_stack.pop();
+    try std.testing.expectEqual(42, top);
 }

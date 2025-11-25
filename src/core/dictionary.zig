@@ -6,6 +6,10 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Type = @import("type.zig");
 const Dictionary = @This();
 
+pub const Error = error{
+    InvalidAddress,
+};
+
 pub const WordFlags = packed struct(u3) {
     immediate: bool = false,
     smudged: bool = false,
@@ -94,10 +98,25 @@ pub fn addName(self: *Dictionary, gpa: Allocator, name: []const u8) !usize {
     return name.len;
 }
 
-pub fn addCode(self: *Dictionary, gpa: Allocator, code_index: Type.CodeIndex) !usize {
-    const code_bytes = mem.toBytes(code_index);
-    try self.data.appendSlice(gpa, &code_bytes);
-    return @sizeOf(Type.CodeIndex);
+pub fn addCode(self: *Dictionary, gpa: Allocator, address: Type.Address) !usize {
+    const addr_bytes = mem.toBytes(address);
+    try self.data.appendSlice(gpa, &addr_bytes);
+    return @sizeOf(Type.Address);
+}
+
+pub fn setLastCode(self: *Dictionary, address: Type.Address) !void {
+    if (self.last_word == null) {
+        return Error.InvalidAddress;
+    }
+    const lwidx = self.last_word.?;
+    const winfo = self.getWordInfo(lwidx) orelse return Error.InvalidAddress;
+    const code_offset = winfo.getCodeOffset();
+    if (lwidx + code_offset + @sizeOf(Type.Address) > self.data.items.len) {
+        return Error.InvalidAddress;
+    }
+    const addr_bytes = mem.toBytes(address);
+    @memcpy(self.data.items[lwidx + code_offset .. lwidx + code_offset + @sizeOf(Type.Address)], &addr_bytes);
+    return;
 }
 
 pub fn getCode(self: *Dictionary, widx: Type.WordIndex) ?Type.CodeIndex {
@@ -112,16 +131,34 @@ pub fn getCode(self: *Dictionary, widx: Type.WordIndex) ?Type.CodeIndex {
 
 pub fn addData(self: *Dictionary, gpa: Allocator, data: Type.CodeIndex) !usize {
     const data_bytes = mem.toBytes(data);
-    try self.data.appendSlice(gpa, data_bytes);
+    try self.data.appendSlice(gpa, &data_bytes);
     return @sizeOf(Type.CodeIndex);
 }
 
-pub fn findWord(self: *Dictionary, name: []const u8) ?Type.WordIndex {
+pub fn setLastData(self: *Dictionary, offset: usize, data: Type.CodeIndex) !void {
+    if (self.last_word == null) {
+        return Error.InvalidAddress;
+    }
+    const lwidx = self.last_word.?;
+    const winfo = self.getWordInfo(lwidx) orelse return Error.InvalidAddress;
+    const data_offset = winfo.getDataOffset() + (offset * @sizeOf(Type.CodeIndex));
+    if (lwidx + data_offset + @sizeOf(Type.CodeIndex) > self.data.items.len) {
+        return Error.InvalidAddress;
+    }
+    const data_bytes = mem.toBytes(data);
+    @memcpy(self.data.items[lwidx + data_offset .. lwidx + data_offset + @sizeOf(Type.CodeIndex)], &data_bytes);
+    return;
+}
+
+pub fn findWordBase(self: *Dictionary, name: []const u8, include_hidden: bool) ?Type.WordIndex {
     var current = self.last_word;
     while (current) |addr| {
         const info = self.getWordInfo(addr) orelse break;
-        if (info.name_len != name.len) {
+        if (info.name_len != name.len or info.flags.smudged or (!include_hidden and info.flags.hidden)) {
             const link = self.getLink(addr) orelse break;
+            if (current == link) {
+                break;
+            }
             current = link;
             continue;
         }
@@ -131,52 +168,73 @@ pub fn findWord(self: *Dictionary, name: []const u8) ?Type.WordIndex {
         if (mem.eql(u8, word_name, name)) {
             return addr;
         }
-        if (addr == 0) {
+        const link = self.getLink(addr) orelse return null;
+        if (current == link) {
             break;
         }
-        const link = self.getLink(addr) orelse return null;
         current = link;
     }
     return null;
 }
 
-pub fn getWord(self: *Dictionary, name: []const u8) ?Word {
-    var current = self.last_word;
-    var last_addr: ?Type.WordIndex = null;
-    while (current) |addr| {
-        last_addr = current;
-        const info_bytes = self.data.items[addr + INFO_OFFSET .. addr + INFO_OFFSET + @sizeOf(WordInfo)];
-        const info: WordInfo = mem.bytesToValue(WordInfo, info_bytes);
-        if (info.name_len != name.len) {
-            const link_ptr = self.getLink(addr) orelse return null;
-            current = link_ptr.*;
-            continue;
-        }
-        const name_start = addr + NAME_OFFSET;
-        const name_end = name_start + info.name_len;
-        const word_name = self.data.items[name_start..name_end];
-        if (mem.eql(u8, word_name, name)) {
-            const code_index_bytes = self.data.items[name_end .. name_end + CODE_SIZE];
-            const code_index: Type.CodeIndex = mem.bytesToValue(Type.CodeIndex, code_index_bytes);
-            const data_start = name_end + CODE_SIZE;
-            var data_end: Type.WordIndex = 0;
-            if (addr == self.last_word) {
-                data_end = self.data.items.len;
-            } else {
-                data_end = last_addr orelse unreachable;
-            }
-            const data = self.data.items[data_start..data_end];
-            const link_ptr = self.getLink(addr) orelse 0;
-            return Word{
-                .link = link_ptr.*,
-                .info = info,
-                .name = word_name,
-                .code_index = code_index,
-                .data = data,
-            };
-        }
-        const link_ptr = self.getLink(addr) orelse return null;
-        current = link_ptr.*;
-    }
-    return null;
+pub inline fn findWord(self: *Dictionary, name: []const u8) ?Type.WordIndex {
+    return self.findWordBase(name, false);
 }
+
+pub inline fn findHiddenWord(self: *Dictionary, name: []const u8) ?Type.WordIndex {
+    return self.findWordBase(name, true);
+}
+
+pub fn setLastFlags(self: *Dictionary, flags: WordFlags) void {
+    if (self.last_word == null) {
+        return;
+    }
+    const widx = self.last_word.?;
+    const info_offset = widx + INFO_OFFSET;
+    const info_bytes = self.data.items[info_offset .. info_offset + @sizeOf(WordInfo)];
+    var info: WordInfo = mem.bytesToValue(WordInfo, info_bytes);
+    info.flags = flags;
+    const new_info_bytes = mem.toBytes(info);
+    @memcpy(self.data.items[info_offset .. info_offset + @sizeOf(WordInfo)], &new_info_bytes);
+}
+
+// pub fn getWord(self: *Dictionary, name: []const u8) ?Word {
+//     var current = self.last_word;
+//     var last_addr: ?Type.WordIndex = null;
+//     while (current) |addr| {
+//         last_addr = current;
+//         const info_bytes = self.data.items[addr + INFO_OFFSET .. addr + INFO_OFFSET + @sizeOf(WordInfo)];
+//         const info: WordInfo = mem.bytesToValue(WordInfo, info_bytes);
+//         if (info.name_len != name.len) {
+//             const link_ptr = self.getLink(addr) orelse return null;
+//             current = link_ptr.*;
+//             continue;
+//         }
+//         const name_start = addr + NAME_OFFSET;
+//         const name_end = name_start + info.name_len;
+//         const word_name = self.data.items[name_start..name_end];
+//         if (mem.eql(u8, word_name, name)) {
+//             const code_index_bytes = self.data.items[name_end .. name_end + CODE_SIZE];
+//             const code_index: Type.CodeIndex = mem.bytesToValue(Type.CodeIndex, code_index_bytes);
+//             const data_start = name_end + CODE_SIZE;
+//             var data_end: Type.WordIndex = 0;
+//             if (addr == self.last_word) {
+//                 data_end = self.data.items.len;
+//             } else {
+//                 data_end = last_addr orelse unreachable;
+//             }
+//             const data = self.data.items[data_start..data_end];
+//             const link_ptr = self.getLink(addr) orelse 0;
+//             return Word{
+//                 .link = link_ptr.*,
+//                 .info = info,
+//                 .name = word_name,
+//                 .code_index = code_index,
+//                 .data = data,
+//             };
+//         }
+//         const link_ptr = self.getLink(addr) orelse return null;
+//         current = link_ptr.*;
+//     }
+//     return null;
+// }

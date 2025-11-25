@@ -44,7 +44,7 @@ fn nextText(self: *Lexer) []const u8 {
         },
         .in_text => {
             switch (src[self.position]) {
-                0, ' ', '\n', '\r', '\t' => {
+                0, ' ', '\n', '\r', '\t'=> {
                     end = self.position;
                     value = src[start..end];
                     return value;
