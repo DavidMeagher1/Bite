@@ -43,7 +43,6 @@ pub const Word = struct {
 
 data: ArrayListUnmanaged(u8) = .empty,
 last_word: ?Type.WordIndex = null,
-here: Type.WordIndex = 0,
 
 pub const LINK_OFFSET: usize = 0;
 pub const INFO_OFFSET: usize = LINK_OFFSET + @sizeOf(Type.WordIndex);
@@ -53,20 +52,31 @@ pub const CODE_SIZE: usize = @sizeOf(Type.CodeIndex);
 pub fn deinit(self: *Dictionary, gpa: Allocator) void {
     self.data.deinit(gpa);
     self.last_word = null;
-    self.here = 0;
+}
+
+pub fn here(self: *Dictionary) Type.WordIndex {
+    return self.data.items.len;
+}
+
+fn addAligned(self: *Dictionary, gpa: Allocator, alignment: usize, data: []const u8) !void {
+    const data_len = data.len;
+    const aligned = std.mem.alignForward(usize, data_len, alignment);
+    try self.data.appendSlice(gpa, data);
+    if (aligned > data_len) {
+        const padding = aligned - data_len;
+        try self.data.appendNTimes(gpa, 0, padding);
+    }
 }
 
 pub fn startWord(self: *Dictionary, gpa: Allocator) !void {
     const link = self.last_word orelse 0;
-    const written = try self.addLink(gpa, link);
-    self.last_word = self.here;
-    self.here += written;
+    self.last_word = self.here();
+    try self.addLink(gpa, link);
 }
 
-pub fn addLink(self: *Dictionary, gpa: Allocator, link: Type.WordIndex) !usize {
+pub fn addLink(self: *Dictionary, gpa: Allocator, link: Type.WordIndex) !void {
     const link_bytes = mem.toBytes(link);
     try self.data.appendSlice(gpa, &link_bytes);
-    return @sizeOf(Type.WordIndex);
 }
 
 pub fn getLink(self: *Dictionary, widx: Type.WordIndex) ?Type.WordIndex {
@@ -78,10 +88,9 @@ pub fn getLink(self: *Dictionary, widx: Type.WordIndex) ?Type.WordIndex {
     return link;
 }
 
-pub fn addWordInfo(self: *Dictionary, gpa: Allocator, info: WordInfo) !usize {
+pub fn addWordInfo(self: *Dictionary, gpa: Allocator, info: WordInfo) !void {
     const info_bytes = mem.toBytes(info);
     try self.data.appendSlice(gpa, &info_bytes);
-    return @sizeOf(WordInfo);
 }
 
 pub fn getWordInfo(self: *Dictionary, widx: Type.WordIndex) ?WordInfo {
@@ -93,15 +102,13 @@ pub fn getWordInfo(self: *Dictionary, widx: Type.WordIndex) ?WordInfo {
     return info;
 }
 
-pub fn addName(self: *Dictionary, gpa: Allocator, name: []const u8) !usize {
+pub fn addName(self: *Dictionary, gpa: Allocator, name: []const u8) !void {
     try self.data.appendSlice(gpa, name);
-    return name.len;
 }
 
-pub fn addCode(self: *Dictionary, gpa: Allocator, address: Type.Address) !usize {
+pub fn addCode(self: *Dictionary, gpa: Allocator, address: Type.Address) !void {
     const addr_bytes = mem.toBytes(address);
     try self.data.appendSlice(gpa, &addr_bytes);
-    return @sizeOf(Type.Address);
 }
 
 pub fn setLastCode(self: *Dictionary, address: Type.Address) !void {
@@ -129,24 +136,23 @@ pub fn getCode(self: *Dictionary, widx: Type.WordIndex) ?Type.CodeIndex {
     return code_index;
 }
 
-pub fn addData(self: *Dictionary, gpa: Allocator, data: Type.CodeIndex) !usize {
+pub fn addData(self: *Dictionary, gpa: Allocator, data: Type.Address) !void {
     const data_bytes = mem.toBytes(data);
     try self.data.appendSlice(gpa, &data_bytes);
-    return @sizeOf(Type.CodeIndex);
 }
 
-pub fn setLastData(self: *Dictionary, offset: usize, data: Type.CodeIndex) !void {
+pub fn setLastData(self: *Dictionary, offset: usize, data: Type.Address) !void {
     if (self.last_word == null) {
         return Error.InvalidAddress;
     }
     const lwidx = self.last_word.?;
     const winfo = self.getWordInfo(lwidx) orelse return Error.InvalidAddress;
-    const data_offset = winfo.getDataOffset() + (offset * @sizeOf(Type.CodeIndex));
-    if (lwidx + data_offset + @sizeOf(Type.CodeIndex) > self.data.items.len) {
+    const data_offset = winfo.getDataOffset() + (offset * @sizeOf(Type.Address));
+    if (lwidx + data_offset + @sizeOf(Type.Address) > self.data.items.len) {
         return Error.InvalidAddress;
     }
     const data_bytes = mem.toBytes(data);
-    @memcpy(self.data.items[lwidx + data_offset .. lwidx + data_offset + @sizeOf(Type.CodeIndex)], &data_bytes);
+    @memcpy(self.data.items[lwidx + data_offset .. lwidx + data_offset + @sizeOf(Type.Address)], &data_bytes);
     return;
 }
 
@@ -197,44 +203,3 @@ pub fn setLastFlags(self: *Dictionary, flags: WordFlags) void {
     const new_info_bytes = mem.toBytes(info);
     @memcpy(self.data.items[info_offset .. info_offset + @sizeOf(WordInfo)], &new_info_bytes);
 }
-
-// pub fn getWord(self: *Dictionary, name: []const u8) ?Word {
-//     var current = self.last_word;
-//     var last_addr: ?Type.WordIndex = null;
-//     while (current) |addr| {
-//         last_addr = current;
-//         const info_bytes = self.data.items[addr + INFO_OFFSET .. addr + INFO_OFFSET + @sizeOf(WordInfo)];
-//         const info: WordInfo = mem.bytesToValue(WordInfo, info_bytes);
-//         if (info.name_len != name.len) {
-//             const link_ptr = self.getLink(addr) orelse return null;
-//             current = link_ptr.*;
-//             continue;
-//         }
-//         const name_start = addr + NAME_OFFSET;
-//         const name_end = name_start + info.name_len;
-//         const word_name = self.data.items[name_start..name_end];
-//         if (mem.eql(u8, word_name, name)) {
-//             const code_index_bytes = self.data.items[name_end .. name_end + CODE_SIZE];
-//             const code_index: Type.CodeIndex = mem.bytesToValue(Type.CodeIndex, code_index_bytes);
-//             const data_start = name_end + CODE_SIZE;
-//             var data_end: Type.WordIndex = 0;
-//             if (addr == self.last_word) {
-//                 data_end = self.data.items.len;
-//             } else {
-//                 data_end = last_addr orelse unreachable;
-//             }
-//             const data = self.data.items[data_start..data_end];
-//             const link_ptr = self.getLink(addr) orelse 0;
-//             return Word{
-//                 .link = link_ptr.*,
-//                 .info = info,
-//                 .name = word_name,
-//                 .code_index = code_index,
-//                 .data = data,
-//             };
-//         }
-//         const link_ptr = self.getLink(addr) orelse return null;
-//         current = link_ptr.*;
-//     }
-//     return null;
-// }

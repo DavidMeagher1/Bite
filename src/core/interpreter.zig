@@ -50,7 +50,7 @@ const InnerInterpreter = struct {
         // assume current IP points to a CodeIndex
         const func_bytes = outer.dictionary.data.items[outer.IP .. outer.IP + @sizeOf(Type.CodeIndex)];
         const func_addr: Type.CodeIndex = std.mem.bytesToValue(Type.CodeIndex, func_bytes);
-        const func:Type.Instruction = @ptrFromInt(func_addr);
+        const func: Type.Instruction = @ptrFromInt(func_addr);
         outer.IP += @sizeOf(Type.Address); // advance past the address
         try func(outer);
         return !outer.inner.halted;
@@ -115,13 +115,13 @@ pub fn step(self: *Interpreter) !void {
                     const cfa = idx + info.getCodeOffset();
                     const addr_bytes = self.dictionary.data.items[cfa .. cfa + @sizeOf(Type.Address)];
                     const addr: Type.CodeIndex = std.mem.bytesToValue(Type.CodeIndex, addr_bytes);
-                    if (addr == @intFromPtr(&primitives.docol)){
+                    if (addr == @intFromPtr(&primitives.docol)) {
                         // we are compiling a user-defined word
-                        self.dictionary.here += try self.dictionary.addCode(self.gpa, @intFromPtr(&primitives.execute));
-                        self.dictionary.here += try self.dictionary.addData(self.gpa, cfa + @sizeOf(Type.Address));
+                        try self.dictionary.addCode(self.gpa, @intFromPtr(&primitives.execute));
+                        try self.dictionary.addData(self.gpa, cfa + @sizeOf(Type.Address));
                     } else {
                         // we are compiling a primitive
-                        self.dictionary.here += try self.dictionary.addCode(self.gpa, addr);
+                        try self.dictionary.addCode(self.gpa, addr);
                     }
                 }
             } else {
@@ -142,13 +142,13 @@ pub fn step(self: *Interpreter) !void {
                 }
             } else {
                 // Compile a LITERAL instruction followed by the value
-                self.dictionary.here += try self.dictionary.addData(self.gpa, @intFromPtr(&primitives.literal)); // compile LITERAL instruction
+                try self.dictionary.addData(self.gpa, @intFromPtr(&primitives.literal)); // compile LITERAL instruction
                 switch (value) {
                     .s_int => |v_int| {
-                        self.dictionary.here += try self.dictionary.addData(self.gpa, @bitCast(v_int));
+                        try self.dictionary.addData(self.gpa, @bitCast(v_int));
                     },
                     .u_int => |v_int| {
-                        self.dictionary.here += try self.dictionary.addData(self.gpa, @bitCast(v_int));
+                        try self.dictionary.addData(self.gpa, @bitCast(v_int));
                     },
                     else => unreachable,
                 }
@@ -177,10 +177,10 @@ pub fn register_primitive(self: *Interpreter, name: []const u8, func: Type.Instr
         },
         .name_len = @truncate(name.len),
     };
-    self.dictionary.here += try self.dictionary.addWordInfo(self.gpa, info);
-    self.dictionary.here += try self.dictionary.addName(self.gpa, name[0..@as(u5, @truncate(name.len))]);
-    self.dictionary.here += try self.dictionary.addCode(self.gpa, @intFromPtr(func));
-    self.dictionary.here += try self.dictionary.addData(self.gpa, @intFromPtr(&primitives.doexit));
+    try self.dictionary.addWordInfo(self.gpa, info);
+    try self.dictionary.addName(self.gpa, name[0..@as(u5, @truncate(name.len))]);
+    try self.dictionary.addCode(self.gpa, @intFromPtr(func));
+    try self.dictionary.addData(self.gpa, @intFromPtr(&primitives.doexit));
 }
 
 test "unknown word" {
@@ -263,10 +263,10 @@ test "create and does" {
     try interpreter.load(": test CREATE DOES> 10 ; test foo foo");
     try interpreter.run();
     const top = try interpreter.data_stack.pop();
-    try std.testing.expectEqual( 10, top);
+    try std.testing.expectEqual(10, top);
 }
 
-test "drop test"{
+test "drop test" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();

@@ -8,7 +8,6 @@ const Dictionary = @import("dictionary.zig");
 // this is because the IP will be after the code index of the primitive being executed not in the word that called it
 // others that do not modify the IP can just call doexit at the end
 
-
 // START: functions that are implementation primitive words but are not in the dictionary
 pub fn docol(self: *Interpreter) !void {
     try self.return_stack.push(self.gpa, self.IP); // store the address of the next instruction to execute
@@ -38,7 +37,7 @@ pub fn execute(interp: *Interpreter) !void {
 }
 
 pub fn does_word(interp: *Interpreter) !void {
-    const old_ip = interp.IP; 
+    const old_ip = interp.IP;
     interp.IP += @sizeOf(Type.CodeIndex); // move past the does> code index
     try push_data_field_addr(interp); // we do this after incrementing to get past the offset to does>
     try docol(interp);
@@ -69,21 +68,24 @@ pub fn colon(interp: *Interpreter) !void {
         .text => |text| {
             info = .{
                 .name_len = @truncate(text.len),
-                .flags = .{ .immediate = false, .smudged = true, },
+                .flags = .{
+                    .immediate = false,
+                    .smudged = true,
+                },
             };
         },
         else => return error.InvalidWordName,
     }
-    interp.dictionary.here += try interp.dictionary.addWordInfo(interp.gpa, info);
-    interp.dictionary.here += try interp.dictionary.addName(interp.gpa, token.text);
-    interp.dictionary.here += try interp.dictionary.addCode(interp.gpa, @intFromPtr(&docol)); // Append docol code
+    try interp.dictionary.addWordInfo(interp.gpa, info);
+    try interp.dictionary.addName(interp.gpa, token.text);
+    try interp.dictionary.addCode(interp.gpa, @intFromPtr(&docol)); // Append docol code
     interp.mode = .compiling;
     try doexit(interp);
 }
 
 pub fn semicolon(interp: *Interpreter) !void {
     // finish the current word definition
-    interp.dictionary.here += try interp.dictionary.addCode(interp.gpa, @intFromPtr(&doexit)); // Append doexit code
+    try interp.dictionary.addCode(interp.gpa, @intFromPtr(&doexit)); // Append doexit code
     const last_word = interp.dictionary.last_word orelse return error.NoCurrentWord;
     var info = interp.dictionary.getWordInfo(last_word) orelse return error.InvalidAddress;
     info.flags.smudged = false;
@@ -93,7 +95,6 @@ pub fn semicolon(interp: *Interpreter) !void {
 }
 
 // END: dictionary definition primitives
-
 
 pub fn literal(interp: *Interpreter) !void {
     // in interpreting mode, get the next value and push it onto the stack
@@ -105,15 +106,15 @@ pub fn literal(interp: *Interpreter) !void {
         return;
     }
     // in compiling mode, compile a lit instruction followed by the value
-    interp.dictionary.here += try interp.dictionary.addCode(interp.gpa, @intFromPtr(&literal)); // compile lit instruction
+    try interp.dictionary.addCode(interp.gpa, @intFromPtr(&literal)); // compile lit instruction
     // get the next value
     const value = interp.lexer.next();
     switch (value) {
         .s_int => |v_int| {
-            interp.dictionary.here += try interp.dictionary.addCode(interp.gpa, @bitCast(v_int));
+            try interp.dictionary.addCode(interp.gpa, @bitCast(v_int));
         },
         .u_int => |v_int| {
-            interp.dictionary.here += try interp.dictionary.addCode(interp.gpa, @bitCast(v_int));
+            try interp.dictionary.addCode(interp.gpa, @bitCast(v_int));
         },
         else => return error.InvalidLiteral,
     }
@@ -139,15 +140,15 @@ pub fn create(interp: *Interpreter) !void {
         },
         else => return error.InvalidWordName,
     }
-    interp.dictionary.here += try interp.dictionary.addWordInfo(interp.gpa, info);
-    interp.dictionary.here += try interp.dictionary.addName(interp.gpa, token.text[0..@truncate(token.text.len)]);
-    interp.dictionary.here += try interp.dictionary.addCode(interp.gpa, @intFromPtr(&push_data_field_addr)); // Append push_data_field_addr code
-    interp.dictionary.here += try interp.dictionary.addCode(interp.gpa, interp.dictionary.here); // Append doexit code
+    try interp.dictionary.addWordInfo(interp.gpa, info);
+    try interp.dictionary.addName(interp.gpa, token.text[0..@truncate(token.text.len)]);
+    try interp.dictionary.addCode(interp.gpa, @intFromPtr(&push_data_field_addr)); // Append push_data_field_addr code
+    try interp.dictionary.addCode(interp.gpa, interp.dictionary.here()); // Append doexit code
 }
 
 pub fn does(interp: *Interpreter) !void {
     // set up a DOES> for the last created word
-    const here = interp.dictionary.here;
+    const here = interp.dictionary.here();
     const last_word = interp.dictionary.last_word orelse return error.NoCurrentWord;
     var info = interp.dictionary.getWordInfo(last_word) orelse return error.InvalidAddress;
     if (!info.flags.smudged) {
@@ -159,9 +160,9 @@ pub fn does(interp: *Interpreter) !void {
     const offset_to_does: Type.CodeIndex = here - std.mem.bytesToValue(Type.CodeIndex, create_start_bytes);
     try interp.dictionary.setLastCode(@intFromPtr(&does_word));
     try interp.dictionary.setLastData(0, offset_to_does);
-    interp.dictionary.here += try interp.dictionary.addCode(interp.gpa, @intFromPtr(&execute)); // Append doexit code
-    interp.dictionary.here += try interp.dictionary.addData(interp.gpa, interp.IP); // append doexit after the DOES> code
-    interp.dictionary.here += try interp.dictionary.addData(interp.gpa, @intFromPtr(&doexit)); // Append doexit code
+    try interp.dictionary.addCode(interp.gpa, @intFromPtr(&execute)); // Append doexit code
+    try interp.dictionary.addData(interp.gpa, interp.IP); // append doexit after the DOES> code
+    try interp.dictionary.addData(interp.gpa, @intFromPtr(&doexit)); // Append doexit code
     info.flags.smudged = false;
     interp.dictionary.setLastFlags(info.flags);
     try doexit(interp); // so we dont execute the DOES> code now
@@ -178,14 +179,12 @@ pub fn immediate(interp: *Interpreter) !void {
 pub fn comma(interp: *Interpreter) !void {
     const value = try interp.data_stack.pop();
     std.debug.print("Comma: {d}\n", .{value});
-    interp.dictionary.here += try interp.dictionary.addData(interp.gpa, value);
-    
+    try interp.dictionary.addData(interp.gpa, value);
 }
 
 pub fn exit(interp: *Interpreter) !void {
     try doexit(interp);
 }
-
 
 // START: arithmetic primitive words
 pub fn add(interp: *Interpreter) !void {
@@ -255,7 +254,7 @@ pub fn nip(interp: *Interpreter) !void {
 pub fn at(interp: *Interpreter) !void {
     std.debug.print("Executing @ primitive\n", .{});
     const addr: Type.Cell = try interp.data_stack.pop();
-    const ptr:*const Type.Cell = @ptrFromInt(addr);
+    const ptr: *const Type.Cell = @ptrFromInt(addr);
     const value: Type.Cell = ptr.*;
     try interp.data_stack.push(interp.gpa, value);
 }
