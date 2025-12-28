@@ -102,6 +102,7 @@ pub fn next(self: *Interp) !bool {
                 },
             }
         },
+
         .number => |num| {
             switch (self.mode) {
                 .Interpret => {

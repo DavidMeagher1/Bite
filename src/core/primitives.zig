@@ -208,6 +208,22 @@ pub fn add(ctx: *Interp) !void {
     try ctx.data_stack.push(a + b);
 }
 
+pub fn words(ctx: *Interp) !void {
+    var current_index = ctx.dict.last;
+    while (true) {
+        const info_index = current_index.add(Dictionary.INFO_OFFSET);
+        const info = try ctx.dict.getInfo(info_index);
+        if (!info.smuged) {
+            const name_index = current_index.add(Dictionary.NAME_OFFSET);
+            const word_name = try ctx.dict.getName(name_index, info.name_length);
+            std.debug.print("{s}\n", .{word_name});
+        }
+        const last_index = current_index;
+        current_index = try ctx.dict.getLink(current_index);
+        if (current_index == last_index) break;
+    }
+}
+
 pub fn addPrimitiveFunctions(dict: *Dictionary, gpa: Allocator) !void {
     try registerPrimitive(dict, gpa, "LITERAL", literal, true);
     try registerPrimitive(dict, gpa, "DROP", drop, false);
@@ -220,4 +236,5 @@ pub fn addPrimitiveFunctions(dict: *Dictionary, gpa: Allocator) !void {
     try registerPrimitive(dict, gpa, ",", comma, false);
     try registerPrimitive(dict, gpa, "@", fetch, false);
     try registerPrimitive(dict, gpa, "!", store, false);
+    try registerPrimitive(dict, gpa, "WORDS", words, true);
 }

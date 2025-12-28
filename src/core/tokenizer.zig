@@ -63,6 +63,7 @@ pub fn next(self: *Tokenizer) ?Result {
     const buf = self.buffer.?;
     state: switch (State.Start) {
         .Start => {
+            if (self.seek >= self.end) return null;
             switch (buf[self.seek]) {
                 0 => {
                     return null;

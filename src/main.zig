@@ -1,4 +1,1 @@
-pub fn main() void {
-    // Entry point of the program
-    return;
-}
+pub fn main() !void {}
