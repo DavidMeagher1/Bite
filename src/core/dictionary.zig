@@ -21,13 +21,13 @@ const Error = error{
 /// A packed struct to hold the info byte for a word
 /// easier to work with than bit manipulation
 pub const Info = packed struct(u8) {
-    smuged: bool,
-    immediate: bool,
-    reserved: bool,
+    smuged: bool = false,
+    immediate: bool = false,
+    reserved: bool = false,
     name_length: u5,
 
-    pub fn fromByte(b: u8) Info {
-        return @bitCast(b);
+    pub fn fromByte(byte: u8) Info {
+        return @bitCast(byte);
     }
 
     pub fn toByte(self: Info) u8 {
@@ -201,8 +201,34 @@ pub fn setExecutionToken(dict: *Dictionary, index: Index, token: ExecutionToken)
     try index.ensure_aligned(@alignOf(usize));
     try index.ensure_within_bounds(dict.data.items.len);
     const i = index.toInt();
-    const tokenBytes: []u8 = mem.asBytes(&token);
+    const tokenBytes: []const u8 = @alignCast(mem.asBytes(&token));
     @memcpy(dict.data.items[i .. i + @sizeOf(ExecutionToken)], tokenBytes);
+}
+
+pub fn addParameter(dict: *Dictionary, gpa: Allocator, T: type, param: T) !void {
+    const bytes: []const u8 = mem.asBytes(&param);
+    try dict.data.appendSlice(gpa, bytes);
+    // update head so subsequent indices use the correct offset
+    dict.head = dict.head.add(@truncate(bytes.len));
+}
+
+pub fn getParameter(dict: *const Dictionary, index: Index, T: type) Index.Error!T {
+    const param_size = @sizeOf(T);
+    try index.ensure_within_bounds(dict.data.items.len);
+    try index.add(param_size - 1).ensure_within_bounds(dict.data.items.len);
+    const i = index.toInt();
+    const paramBytes = dict.data.items[i .. i + param_size];
+    const param_ptr: *const T = @alignCast(mem.bytesAsValue(T, paramBytes));
+    return param_ptr.*;
+}
+
+pub fn setParameter(dict: *Dictionary, index: Index, T: type, param: T) Index.Error!void {
+    const param_size = @sizeOf(T);
+    try index.ensure_within_bounds(dict.data.items.len);
+    try index.add(param_size - 1).ensure_within_bounds(dict.data.items.len);
+    const i = index.toInt();
+    const paramBytes: []u8 = mem.asBytes(&param);
+    @memcpy(dict.data.items[i .. i + param_size], paramBytes);
 }
 
 pub fn createWord(dict: *Dictionary, gpa: Allocator) !Index {
@@ -285,7 +311,6 @@ test "addInfo and getInfo" {
 
     const retrieved1 = try dict.getInfo(.zero);
     const retrieved2 = try dict.getInfo(Index.fromInt(1));
-
     try std.testing.expect(retrieved1 == info1);
     try std.testing.expect(retrieved2 == info2);
 }
@@ -435,4 +460,16 @@ test "findWord" {
     try std.testing.expect(found_word1 == word1_start);
     try std.testing.expect(found_word2 == word2_start);
     try std.testing.expect(not_found == null);
+}
+
+test "info bitcast" {
+    const info = Info{
+        .smuged = true,
+        .immediate = false,
+        .reserved = true,
+        .name_length = 21,
+    };
+    const byte = info.toByte();
+    const reconstructed_info = Info.fromByte(byte);
+    try std.testing.expect(reconstructed_info == info);
 }
