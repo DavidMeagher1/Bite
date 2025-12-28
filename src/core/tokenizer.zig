@@ -8,7 +8,7 @@ const Tokenizer = @This();
 
 // should i automatically parse integers?
 
-buffer: []const u8,
+buffer: ?[]const u8 = null,
 seek: usize = 0,
 end: usize = 0,
 
@@ -25,25 +25,45 @@ const State = enum {
     Binary,
 };
 
-pub fn load(self: Tokenizer, buffer: []const u8) void {
+pub fn load(self: *Tokenizer, gpa: Allocator, reader: *io.Reader, limit: usize) !void {
+    if (self.buffer) |buf| {
+        gpa.free(buf);
+    }
+    const buffer = try gpa.alloc(u8, limit);
+    const bytesRead = try reader.readSliceShort(buffer);
     self.buffer = buffer;
     self.seek = 0;
-    self.end = buffer.len;
+    self.end = bytesRead;
+}
+
+pub fn deinit(self: *Tokenizer, gpa: Allocator) void {
+    if (self.buffer) |buf| {
+        gpa.free(buf);
+    }
+    self.buffer = null;
+    self.seek = 0;
+    self.end = 0;
 }
 
 pub fn reset(self: *Tokenizer) void {
     self.seek = 0;
+    if (self.buffer) |buf| {
+        self.end = buf.len;
+    } else {
+        self.end = 0;
+    }
 }
 
 pub fn next(self: *Tokenizer) ?Result {
     var start: usize = self.seek;
     var end: usize = self.seek;
-    if (self.seek >= self.end) {
+    if (self.seek >= self.end or self.buffer == null) {
         return null;
     }
+    const buf = self.buffer.?;
     state: switch (State.Start) {
         .Start => {
-            switch (self.buffer[self.seek]) {
+            switch (buf[self.seek]) {
                 0 => {
                     return null;
                 },
@@ -80,12 +100,12 @@ pub fn next(self: *Tokenizer) ?Result {
             self.seek += 1;
             if (self.seek >= self.end) {
                 end = self.seek;
-                return Result{ .symbol = self.buffer[start..end] };
+                return Result{ .symbol = buf[start..end] };
             }
-            switch (self.buffer[self.seek]) {
+            switch (buf[self.seek]) {
                 ' ', '\n', '\r', '\t', 0 => {
                     end = self.seek;
-                    return Result{ .symbol = self.buffer[start..end] };
+                    return Result{ .symbol = buf[start..end] };
                 },
                 else => {
                     continue :state .Symbol;
@@ -96,18 +116,18 @@ pub fn next(self: *Tokenizer) ?Result {
             self.seek += 1;
             if (self.seek >= self.end) {
                 end = self.seek;
-                const number: usize = fmt.parseInt(usize, self.buffer[start..end], 10) catch {
+                const number: usize = fmt.parseInt(usize, buf[start..end], 10) catch {
                     return null;
                 };
                 return Result{ .number = number };
             }
-            switch (self.buffer[self.seek]) {
+            switch (buf[self.seek]) {
                 '0'...'9' => {
                     continue :state .Decimal;
                 },
                 else => {
                     end = self.seek;
-                    const number: usize = fmt.parseInt(usize, self.buffer[start..end], 10) catch {
+                    const number: usize = fmt.parseInt(usize, buf[start..end], 10) catch {
                         return null;
                     };
                     return Result{ .number = number };
@@ -118,18 +138,18 @@ pub fn next(self: *Tokenizer) ?Result {
             self.seek += 1;
             if (self.seek >= self.end) {
                 end = self.seek;
-                const number: usize = fmt.parseInt(usize, self.buffer[start..end], 16) catch {
+                const number: usize = fmt.parseInt(usize, buf[start..end], 16) catch {
                     return null;
                 };
                 return Result{ .number = number };
             }
-            switch (self.buffer[self.seek]) {
+            switch (buf[self.seek]) {
                 '0'...'9', 'A'...'F', 'a'...'f' => {
                     continue :state .Hex;
                 },
                 else => {
                     end = self.seek;
-                    const number: usize = fmt.parseInt(usize, self.buffer[start..end], 16) catch {
+                    const number: usize = fmt.parseInt(usize, buf[start..end], 16) catch {
                         return null;
                     };
                     return Result{ .number = number };
@@ -140,18 +160,18 @@ pub fn next(self: *Tokenizer) ?Result {
             self.seek += 1;
             if (self.seek >= self.end) {
                 end = self.seek;
-                const number: usize = fmt.parseInt(usize, self.buffer[start..end], 2) catch {
+                const number: usize = fmt.parseInt(usize, buf[start..end], 2) catch {
                     return null;
                 };
                 return Result{ .number = number };
             }
-            switch (self.buffer[self.seek]) {
+            switch (buf[self.seek]) {
                 '0', '1' => {
                     continue :state .Binary;
                 },
                 else => {
                     end = self.seek;
-                    const number: usize = fmt.parseInt(usize, self.buffer[start..end], 2) catch {
+                    const number: usize = fmt.parseInt(usize, buf[start..end], 2) catch {
                         return null;
                     };
                     return Result{ .number = number };
@@ -162,8 +182,12 @@ pub fn next(self: *Tokenizer) ?Result {
 }
 
 test "Tokenizer parses symbols and numbers" {
+    const gpa = std.heap.page_allocator;
     const input = "hello 123 $7B %1111011 world";
-    var tokenizer = Tokenizer{ .buffer = input, .end = input.len };
+    var reader = std.io.Reader.fixed(input);
+    var tokenizer = Tokenizer{};
+    try tokenizer.load(gpa, &reader, input.len);
+    defer tokenizer.deinit(gpa);
 
     const token1 = tokenizer.next() orelse unreachable;
     try std.testing.expect(mem.eql(u8, token1.symbol, "hello"));
