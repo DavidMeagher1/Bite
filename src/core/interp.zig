@@ -200,7 +200,7 @@ test "Interp add2" {
 test "simple DOES> CREATE" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-    const buffer: []const u8 = ": CONST CREATE , DOES> @ ; 33 CONST MYCONST MYCONST";
+    const buffer: []const u8 = "33 CONST MYCONST MYCONST";
     const reader: std.io.Reader = std.io.Reader.fixed(buffer);
     var interp = try Interp.init(allocator, reader);
     try primitives.addPrimitiveFunctions(&interp.dict, allocator);
@@ -213,7 +213,7 @@ test "simple DOES> CREATE" {
 test "DOES> not executed at definition" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = gpa.allocator();
-    const buffer: []const u8 = ": CONST CREATE , DOES> @ ; 33 CONST MYCONST";
+    const buffer: []const u8 = "33 CONST MYCONST";
     const reader: std.io.Reader = std.io.Reader.fixed(buffer);
     var interp = try Interp.init(allocator, reader);
     try primitives.addPrimitiveFunctions(&interp.dict, allocator);

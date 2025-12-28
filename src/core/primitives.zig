@@ -224,6 +224,13 @@ pub fn words(ctx: *Interp) !void {
     }
 }
 
+pub fn @"const"(ctx: *Interp) !void {
+    try doCol(ctx);
+    try create(ctx);
+    try comma(ctx);
+    try does(ctx);
+}
+
 pub fn addPrimitiveFunctions(dict: *Dictionary, gpa: Allocator) !void {
     try registerPrimitive(dict, gpa, "LITERAL", literal, true);
     try registerPrimitive(dict, gpa, "DROP", drop, false);
@@ -237,4 +244,9 @@ pub fn addPrimitiveFunctions(dict: *Dictionary, gpa: Allocator) !void {
     try registerPrimitive(dict, gpa, "@", fetch, false);
     try registerPrimitive(dict, gpa, "!", store, false);
     try registerPrimitive(dict, gpa, "WORDS", words, true);
+    // constant definition
+    try registerPrimitive(dict, gpa, "CONST", @"const", false);
+    try dict.addParameter(gpa, usize, @intFromPtr(&fetch));
+    try dict.addParameter(gpa, usize, @intFromPtr(&exit));
+    // end constant definition
 }
