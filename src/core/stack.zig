@@ -9,17 +9,24 @@ pub const Error = error{
 
 pub fn Stack(comptime T: type) type {
     return struct {
+        const Self = @This();
         items: []T,
         top: usize,
 
-        pub fn init(allocator: std.mem.Allocator, capacity: usize) !Stack {
-            return Stack{
+        pub fn init(allocator: Allocator, capacity: usize) !Self {
+            return Self{
                 .items = try allocator.alloc(T, capacity),
                 .top = 0,
             };
         }
 
-        pub fn push(self: *Stack, value: T) Error!void {
+        pub fn deinit(self: *Self, allocator: Allocator) void {
+            allocator.free(self.items);
+            self.items = &[_]T{};
+            self.top = 0;
+        }
+
+        pub fn push(self: *Self, value: T) Error!void {
             if (self.top >= self.items.len) {
                 return error.StackOverflow;
             }
@@ -27,7 +34,7 @@ pub fn Stack(comptime T: type) type {
             self.top += 1;
         }
 
-        pub fn pop(self: *Stack) Error!T {
+        pub fn pop(self: *Self) Error!T {
             if (self.top == 0) {
                 return error.StackUnderflow;
             }
@@ -36,7 +43,7 @@ pub fn Stack(comptime T: type) type {
             return value;
         }
 
-        pub fn peek(self: *const Stack) Error!T {
+        pub fn peek(self: *const Self) Error!T {
             if (self.top == 0) {
                 return error.StackUnderflow;
             }
