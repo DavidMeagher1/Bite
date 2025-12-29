@@ -93,7 +93,6 @@ pub fn create(ctx: *Interp) !void {
             _ = try ctx.dict.createWord(ctx.gpa);
             const info = Info{
                 .name_length = @truncate(name.len),
-                .smuged = true,
             };
             try ctx.dict.addInfo(ctx.gpa, info);
             try ctx.dict.addName(ctx.gpa, name);
@@ -108,11 +107,11 @@ pub fn create(ctx: *Interp) !void {
 pub fn does(ctx: *Interp) !void {
     const word_index = ctx.dict.last;
     var info = try ctx.dict.getInfo(word_index.add(Dictionary.INFO_OFFSET));
-    if (!info.smuged) {
-        return error.DoesRequiresCreate;
-    }
-    info.smuged = false;
-    try ctx.dict.setInfo(word_index.add(Dictionary.INFO_OFFSET), info);
+    // if (!info.smuged) {
+    //     return error.DoesRequiresCreate;
+    // }
+    // info.smuged = false;
+    // try ctx.dict.setInfo(word_index.add(Dictionary.INFO_OFFSET), info);
     // Modify the execution token to point to doDoes
     const execution_token: ExecutionToken = @intFromPtr(&doDoes);
     const exec_token_index = word_index.add(info.nameEndOffset()).forward_aligned(@alignOf(usize));
@@ -202,6 +201,18 @@ pub fn drop(ctx: *Interp) !void {
     _ = try ctx.data_stack.pop();
 }
 
+pub fn dup(ctx: *Interp) !void {
+    const value = try ctx.data_stack.peek();
+    try ctx.data_stack.push(value);
+}
+
+pub fn swap(ctx: *Interp) !void {
+    const a = try ctx.data_stack.pop();
+    const b = try ctx.data_stack.pop();
+    try ctx.data_stack.push(a);
+    try ctx.data_stack.push(b);
+}
+
 pub fn add(ctx: *Interp) !void {
     const b = try ctx.data_stack.pop();
     const a = try ctx.data_stack.pop();
@@ -231,6 +242,14 @@ pub fn @"const"(ctx: *Interp) !void {
     try does(ctx);
 }
 
+pub fn @"var"(ctx: *Interp) !void {
+    try doCol(ctx);
+    try create(ctx);
+    try ctx.data_stack.push(@sizeOf(usize));
+    try allot(ctx);
+    try exit(ctx);
+}
+
 pub fn lparen(ctx: *Interp) !void {
     const stored_seek = ctx.tokenizer.seek - 1; // include the '('
     var token = ctx.tokenizer.next();
@@ -251,9 +270,19 @@ pub fn lparen(ctx: *Interp) !void {
     return error.UnterminatedComment;
 }
 
+pub fn allot(ctx: *Interp) !void {
+    const num_bytes = try ctx.data_stack.pop();
+    const current_head = ctx.dict.head.toInt();
+    const new_head = current_head + num_bytes;
+    try ctx.dict.data.resize(ctx.gpa, new_head);
+    ctx.dict.head = Index.fromInt(new_head);
+}
+
 pub fn addPrimitiveFunctions(dict: *Dictionary, gpa: Allocator) !void {
     try registerPrimitive(dict, gpa, "LITERAL", literal, true);
     try registerPrimitive(dict, gpa, "DROP", drop, false);
+    try registerPrimitive(dict, gpa, "DUP", dup, false);
+    try registerPrimitive(dict, gpa, "SWAP", swap, false);
     try registerPrimitive(dict, gpa, "+", add, false);
     try registerPrimitive(dict, gpa, ":", defineWord, true);
     try registerPrimitive(dict, gpa, ";", endDefinition, true);
@@ -270,4 +299,6 @@ pub fn addPrimitiveFunctions(dict: *Dictionary, gpa: Allocator) !void {
     try dict.addParameter(gpa, usize, @intFromPtr(&exit));
     // end constant definition
     try registerPrimitive(dict, gpa, "(", lparen, true);
+    try registerPrimitive(dict, gpa, "ALLOT", allot, false);
+    try registerPrimitive(dict, gpa, "VAR", @"var", false);
 }

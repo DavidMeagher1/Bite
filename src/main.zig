@@ -51,7 +51,8 @@ fn quit(ctx: *bite.interp) !void {
 
 fn reset(ctx: *bite.interp) !void {
     ctx.reset();
-    inputed_code.clear(ctx.gpa);
+    //inputed_code.clear(ctx.gpa);
+    try ctx.dict.resetToMark(ctx.gpa);
     return error.DEBUG;
 }
 
@@ -69,6 +70,61 @@ fn listCode(ctx: *bite.interp) !void {
     try inputed_code.writeLines(&writer.interface, true);
     _ = try writer.interface.write("---\n");
     try writer.interface.flush();
+    return error.DEBUG;
+}
+
+fn saveCode(ctx: *bite.interp) !void {
+    // for now, just do nothing
+    const token = ctx.tokenizer.next();
+    if (token) |t| {
+        switch (t) {
+            .symbol => |sym| {
+                var file = try std.fs.cwd().createFile(sym, .{
+                    .truncate = true,
+                });
+                defer file.close();
+                var buffer: [1024]u8 = undefined;
+                var writer = file.writer(&buffer);
+                try inputed_code.writeLines(&writer.interface, false);
+                try writer.interface.flush();
+            },
+            else => {
+                return error.InvalidArgument;
+            },
+        }
+    } else {
+        return error.InvalidArgument;
+    }
+    return error.DEBUG;
+}
+
+pub fn loadCode(ctx: *bite.interp) !void {
+    const token = ctx.tokenizer.next();
+    if (token) |t| {
+        switch (t) {
+            .symbol => |sym| {
+                var file = try std.fs.cwd().openFile(sym, .{ .mode = .read_only });
+                defer file.close();
+                var buffer: [1024]u8 = undefined;
+                var reader = file.reader(&buffer);
+                while (true) {
+                    const line = reader.interface.takeDelimiterInclusive('\n') catch |e| {
+                        if (e == error.EndOfStream) {
+                            break;
+                        } else {
+                            return e;
+                        }
+                    };
+                    try inputed_code.addLine(ctx.gpa, line);
+                }
+            },
+            else => {
+                return error.InvalidArgument;
+            },
+        }
+    } else {
+        return error.InvalidArgument;
+    }
     return error.DEBUG;
 }
 
@@ -135,7 +191,10 @@ pub fn main() !void {
     var writer = stdout.writer(&out_buffer);
     var reader = stdin.reader(&in_buffer);
 
-    var interp = try bite.interp.init(allocator);
+    var interp = try bite.interp.init(allocator, .{
+        .stack_capacity = 256,
+        .control_stack_capacity = 64,
+    });
     defer interp.deinit();
     try bite.primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try bite.primitives.registerPrimitive(
@@ -215,6 +274,21 @@ pub fn main() !void {
         &replayCode,
         false,
     );
+    try bite.primitives.registerPrimitive(
+        &interp.dict,
+        allocator,
+        ".S",
+        &saveCode,
+        false,
+    );
+    try bite.primitives.registerPrimitive(
+        &interp.dict,
+        allocator,
+        ".L",
+        &loadCode,
+        false,
+    );
+    interp.dict.mark();
     outer_loop: while (!exit) {
         try writer.interface.print("> ", .{});
         try writer.interface.flush();

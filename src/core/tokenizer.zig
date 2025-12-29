@@ -182,10 +182,13 @@ pub fn next(self: *Tokenizer) ?Result {
 }
 
 test "Tokenizer parses symbols and numbers" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
     const input = "hello 123 $7B %1111011 world";
     var tokenizer = Tokenizer{};
-    tokenizer.load(input);
-    defer tokenizer.deinit();
+    try tokenizer.load(allocator, input);
+    defer tokenizer.deinit(allocator);
 
     const token1 = tokenizer.next() orelse unreachable;
     try std.testing.expect(mem.eql(u8, token1.symbol, "hello"));

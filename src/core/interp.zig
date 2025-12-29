@@ -10,6 +10,11 @@ const Stack = @import("stack.zig").Stack;
 
 const Interp = @This();
 
+const InterpOptions = struct {
+    stack_capacity: usize = 256,
+    control_stack_capacity: usize = 64,
+};
+
 const Mode = enum {
     Interpret,
     Compile,
@@ -22,9 +27,11 @@ tokenizer: Tokenizer,
 mode: Mode = .Interpret,
 data_stack: Stack(usize),
 return_stack: Stack(usize),
+control_stack: Stack(usize),
 
 pub fn init(
     gpa: Allocator,
+    options: InterpOptions,
 ) !Interp {
     return Interp{
         .gpa = gpa,
@@ -32,8 +39,9 @@ pub fn init(
         .dict = .{},
         .tokenizer = .{ .buffer = undefined },
         .mode = .Interpret,
-        .data_stack = try Stack(usize).init(gpa, 256),
-        .return_stack = try Stack(usize).init(gpa, 256),
+        .data_stack = try Stack(usize).init(gpa, options.stack_capacity),
+        .return_stack = try Stack(usize).init(gpa, options.stack_capacity),
+        .control_stack = try Stack(usize).init(gpa, options.control_stack_capacity),
     };
 }
 
@@ -42,6 +50,7 @@ pub fn deinit(self: *Interp) void {
     self.dict.deinit(self.gpa);
     self.data_stack.deinit(self.gpa);
     self.return_stack.deinit(self.gpa);
+    self.control_stack.deinit(self.gpa);
 }
 
 fn innerLoop(self: *Interp) !void {
@@ -143,7 +152,7 @@ test "Interp init and deinit" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    var interp = try Interp.init(allocator);
+    var interp = try Interp.init(allocator, .{});
     interp.deinit();
 }
 
@@ -151,7 +160,7 @@ test "Interp next with empty input" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    var interp = try Interp.init(allocator);
+    var interp = try Interp.init(allocator, .{});
     _ = try interp.next();
     interp.deinit();
 }
@@ -161,8 +170,8 @@ test "Interp next with single number" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const buffer: []const u8 = "42";
-    var interp = try Interp.init(allocator);
-    interp.tokenizer.load(buffer);
+    var interp = try Interp.init(allocator, .{});
+    try interp.tokenizer.load(allocator, buffer);
     _ = try interp.next();
     const value = try interp.data_stack.pop();
     try std.testing.expect(value == 42);
@@ -174,7 +183,7 @@ test "Interp with addition" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const buffer: []const u8 = "10 32 +";
-    var interp = try Interp.init(allocator);
+    var interp = try Interp.init(allocator, .{});
     try primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try interp.run(buffer);
     const result = try interp.data_stack.pop();
@@ -187,7 +196,7 @@ test "Interp with literal in compile mode" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const buffer: []const u8 = ": TEST LITERAL 99 ; TEST";
-    var interp = try Interp.init(allocator);
+    var interp = try Interp.init(allocator, .{});
     try primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try interp.run(buffer);
     const value = try interp.data_stack.pop();
@@ -200,7 +209,7 @@ test "Interp add2" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const buffer: []const u8 = ": ADD2 LITERAL 2 + ; 40 ADD2";
-    var interp = try Interp.init(allocator);
+    var interp = try Interp.init(allocator, .{});
     try primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try interp.run(buffer);
     const result = try interp.data_stack.pop();
@@ -213,7 +222,7 @@ test "simple DOES> CREATE" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const buffer: []const u8 = "33 CONST MYCONST MYCONST";
-    var interp = try Interp.init(allocator);
+    var interp = try Interp.init(allocator, .{});
     try primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try interp.run(buffer);
     const value = try interp.data_stack.pop();
@@ -226,7 +235,7 @@ test "DOES> not executed at definition" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     const buffer: []const u8 = "33 CONST MYCONST";
-    var interp = try Interp.init(allocator);
+    var interp = try Interp.init(allocator, .{});
     try primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try interp.run(buffer);
     try std.testing.expect(interp.data_stack.top == 0);

@@ -113,6 +113,8 @@ pub const ExecutionToken = usize;
 data: ByteList = .empty,
 last: Index = .zero,
 head: Index = .zero,
+_internal_mark: Index = .zero,
+_internal_last: Index = .zero,
 
 pub fn deinit(dict: *Dictionary, gpa: Allocator) void {
     dict.data.deinit(gpa);
@@ -267,6 +269,17 @@ pub fn findWord(dict: *const Dictionary, name: []const u8) !?Index {
             return err;
         }
     };
+}
+
+pub fn mark(dict: *Dictionary) void {
+    dict._internal_mark = dict.head;
+    dict._internal_last = dict.last;
+}
+
+pub fn resetToMark(dict: *Dictionary, gpa: Allocator) !void {
+    dict.head = dict._internal_mark;
+    dict.last = dict._internal_last;
+    try dict.data.resize(gpa, dict.head.toInt());
 }
 
 test "addLink getLink" {
