@@ -1,4 +1,5 @@
 const std = @import("std");
+const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const fmt = std.fmt;
 const mem = std.mem;
 const Allocator = std.mem.Allocator;
@@ -8,9 +9,10 @@ const Tokenizer = @This();
 
 // should i automatically parse integers?
 
-buffer: ?[]const u8 = null,
+buffer: ArrayListUnmanaged(u8) = .empty,
 seek: usize = 0,
 end: usize = 0,
+_needs_input: bool = false,
 
 const Result = union(enum) {
     symbol: []const u8,
@@ -25,42 +27,39 @@ const State = enum {
     Binary,
 };
 
-pub fn load(self: *Tokenizer, gpa: Allocator, reader: *io.Reader, limit: usize) !void {
-    if (self.buffer) |buf| {
-        gpa.free(buf);
-    }
-    const buffer = try gpa.alloc(u8, limit);
-    const bytesRead = try reader.readSliceShort(buffer);
-    self.buffer = buffer;
+pub fn load(self: *Tokenizer, gpa: Allocator, buffer: []const u8) !void {
+    try self.buffer.ensureTotalCapacity(gpa, buffer.len);
+    self.buffer.clearRetainingCapacity();
+    _ = try self.buffer.appendSlice(gpa, buffer);
     self.seek = 0;
-    self.end = bytesRead;
+    self.end = buffer.len;
+    self._needs_input = false;
+}
+
+pub fn append(self: *Tokenizer, gpa: Allocator, buffer: []const u8) !void {
+    try self.buffer.appendSlice(gpa, buffer);
+    self.end += buffer.len;
 }
 
 pub fn deinit(self: *Tokenizer, gpa: Allocator) void {
-    if (self.buffer) |buf| {
-        gpa.free(buf);
-    }
-    self.buffer = null;
+    self.buffer.deinit(gpa);
     self.seek = 0;
     self.end = 0;
+    self._needs_input = false;
 }
 
 pub fn reset(self: *Tokenizer) void {
     self.seek = 0;
-    if (self.buffer) |buf| {
-        self.end = buf.len;
-    } else {
-        self.end = 0;
-    }
+    self.end = self.buffer.items.len;
+    self._needs_input = false;
 }
-
 pub fn next(self: *Tokenizer) ?Result {
     var start: usize = self.seek;
     var end: usize = self.seek;
-    if (self.seek >= self.end or self.buffer == null) {
+    if (self.seek >= self.end) {
         return null;
     }
-    const buf = self.buffer.?;
+    const buf = self.buffer.items[0..self.end];
     state: switch (State.Start) {
         .Start => {
             if (self.seek >= self.end) return null;
@@ -183,12 +182,10 @@ pub fn next(self: *Tokenizer) ?Result {
 }
 
 test "Tokenizer parses symbols and numbers" {
-    const gpa = std.heap.page_allocator;
     const input = "hello 123 $7B %1111011 world";
-    var reader = std.io.Reader.fixed(input);
     var tokenizer = Tokenizer{};
-    try tokenizer.load(gpa, &reader, input.len);
-    defer tokenizer.deinit(gpa);
+    tokenizer.load(input);
+    defer tokenizer.deinit();
 
     const token1 = tokenizer.next() orelse unreachable;
     try std.testing.expect(mem.eql(u8, token1.symbol, "hello"));

@@ -231,6 +231,26 @@ pub fn @"const"(ctx: *Interp) !void {
     try does(ctx);
 }
 
+pub fn lparen(ctx: *Interp) !void {
+    const stored_seek = ctx.tokenizer.seek - 1; // include the '('
+    var token = ctx.tokenizer.next();
+    while (token != null) {
+        switch (token.?) {
+            .symbol => |sym| {
+                if (mem.eql(u8, sym, ")")) {
+                    ctx.tokenizer._needs_input = false;
+                    return;
+                }
+            },
+            else => {},
+        }
+        token = ctx.tokenizer.next();
+    }
+    ctx.tokenizer.seek = stored_seek;
+    ctx.tokenizer._needs_input = true;
+    return error.UnterminatedComment;
+}
+
 pub fn addPrimitiveFunctions(dict: *Dictionary, gpa: Allocator) !void {
     try registerPrimitive(dict, gpa, "LITERAL", literal, true);
     try registerPrimitive(dict, gpa, "DROP", drop, false);
@@ -249,4 +269,5 @@ pub fn addPrimitiveFunctions(dict: *Dictionary, gpa: Allocator) !void {
     try dict.addParameter(gpa, usize, @intFromPtr(&fetch));
     try dict.addParameter(gpa, usize, @intFromPtr(&exit));
     // end constant definition
+    try registerPrimitive(dict, gpa, "(", lparen, true);
 }

@@ -26,6 +26,10 @@ pub fn Stack(comptime T: type) type {
             self.top = 0;
         }
 
+        pub fn reset(self: *Self) void {
+            self.top = 0;
+        }
+
         pub fn push(self: *Self, value: T) Error!void {
             if (self.top >= self.items.len) {
                 return error.StackOverflow;
