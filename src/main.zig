@@ -196,7 +196,6 @@ pub fn main() !void {
         .control_stack_capacity = 64,
     });
     defer interp.deinit();
-    try bite.primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try bite.primitives.registerPrimitive(
         &interp.dict,
         allocator,
@@ -288,7 +287,6 @@ pub fn main() !void {
         &loadCode,
         false,
     );
-    interp.dict.mark();
     outer_loop: while (!exit) {
         try writer.interface.print("> ", .{});
         try writer.interface.flush();

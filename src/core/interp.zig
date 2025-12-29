@@ -33,7 +33,7 @@ pub fn init(
     gpa: Allocator,
     options: InterpOptions,
 ) !Interp {
-    return Interp{
+    var result = Interp{
         .gpa = gpa,
         .IP = 0,
         .dict = .{},
@@ -43,6 +43,9 @@ pub fn init(
         .return_stack = try Stack(usize).init(gpa, options.stack_capacity),
         .control_stack = try Stack(usize).init(gpa, options.control_stack_capacity),
     };
+    try primitives.addPrimitives(&result.dict, gpa);
+    result.dict.mark();
+    return result;
 }
 
 pub fn deinit(self: *Interp) void {
@@ -92,9 +95,9 @@ pub fn next(self: *Interp) !bool {
                         const index = word_index.add(info.nameEndOffset()).forward_aligned(@alignOf(usize));
                         const fn_ptr_addr = try self.dict.getExecutionToken(index);
                         const fn_ptr: PrimitiveFunction = @ptrFromInt(fn_ptr_addr);
-                        if (fn_ptr == primitives.doCol) {
+                        if (fn_ptr == primitives.defining.doCol) {
                             // Compile a call to the colon definition
-                            try self.dict.addParameter(self.gpa, usize, @intFromPtr(&primitives.goto));
+                            try self.dict.addParameter(self.gpa, usize, @intFromPtr(&primitives.core.goto));
                             try self.dict.addParameter(self.gpa, usize, index.toInt());
                         } else {
                             // Compile the primitive function address directly
@@ -111,7 +114,7 @@ pub fn next(self: *Interp) !bool {
                     try self.data_stack.push(num);
                 },
                 .Compile => {
-                    try self.dict.addParameter(self.gpa, usize, @intFromPtr(&primitives.lit));
+                    try self.dict.addParameter(self.gpa, usize, @intFromPtr(&primitives.stack.lit));
                     try self.dict.addParameter(self.gpa, usize, num);
                 },
             }
@@ -145,6 +148,7 @@ pub fn reset(self: *Interp) void {
     self.mode = .Interpret;
     self.data_stack.reset();
     self.return_stack.reset();
+    self.control_stack.reset();
     self.IP = 0;
 }
 
@@ -184,7 +188,6 @@ test "Interp with addition" {
     const allocator = gpa.allocator();
     const buffer: []const u8 = "10 32 +";
     var interp = try Interp.init(allocator, .{});
-    try primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try interp.run(buffer);
     const result = try interp.data_stack.pop();
     try std.testing.expect(result == 42);
@@ -194,10 +197,11 @@ test "Interp with addition" {
 test "Interp with literal in compile mode" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var dbg = std.heap.DebugAllocator(.{}){};
+    defer _ = dbg.deinit();
+    const allocator = dbg.allocator();
     const buffer: []const u8 = ": TEST LITERAL 99 ; TEST";
     var interp = try Interp.init(allocator, .{});
-    try primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try interp.run(buffer);
     const value = try interp.data_stack.pop();
     try std.testing.expect(value == 99);
@@ -210,7 +214,6 @@ test "Interp add2" {
     const allocator = gpa.allocator();
     const buffer: []const u8 = ": ADD2 LITERAL 2 + ; 40 ADD2";
     var interp = try Interp.init(allocator, .{});
-    try primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try interp.run(buffer);
     const result = try interp.data_stack.pop();
     try std.testing.expect(result == 42);
@@ -223,7 +226,6 @@ test "simple DOES> CREATE" {
     const allocator = gpa.allocator();
     const buffer: []const u8 = "33 CONST MYCONST MYCONST";
     var interp = try Interp.init(allocator, .{});
-    try primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try interp.run(buffer);
     const value = try interp.data_stack.pop();
     try std.testing.expect(value == 33);
@@ -236,7 +238,6 @@ test "DOES> not executed at definition" {
     const allocator = gpa.allocator();
     const buffer: []const u8 = "33 CONST MYCONST";
     var interp = try Interp.init(allocator, .{});
-    try primitives.addPrimitiveFunctions(&interp.dict, allocator);
     try interp.run(buffer);
     try std.testing.expect(interp.data_stack.top == 0);
     interp.deinit();
