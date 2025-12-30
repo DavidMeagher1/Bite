@@ -52,6 +52,24 @@ pub fn lparen(ctx: *Interp) !void {
     return error.UnterminatedComment;
 }
 
+pub fn getWordExecutionToken(ctx: *Interp) !void {
+    const token = ctx.tokenizer.next() orelse return error.ExpectedWord;
+    if (token != .symbol) {
+        return error.ExpectedWord;
+    }
+    const index = try ctx.dict.findWord(token.symbol) orelse return error.WordNotFound;
+    const info = try ctx.dict.getInfo(index.add(Dictionary.INFO_OFFSET));
+    const et = index.add(info.nameEndOffset()).forward_aligned(@alignOf(usize)).toInt();
+    try ctx.data_stack.push(et);
+}
+
+pub fn execute(ctx: *Interp) !void {
+    const et = try ctx.data_stack.pop();
+    ctx.IP = et;
+}
+
 pub fn addCorePrimitives(dict: *Dictionary, gpa: Allocator) !void {
     try registerPrimitive(dict, gpa, "(", lparen, true);
+    try registerPrimitive(dict, gpa, "'", getWordExecutionToken, false);
+    try registerPrimitive(dict, gpa, "EXECUTE", execute, false);
 }

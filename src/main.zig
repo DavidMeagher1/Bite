@@ -287,6 +287,7 @@ pub fn main() !void {
         &loadCode,
         false,
     );
+    interp.dict.mark();
     outer_loop: while (!exit) {
         try writer.interface.print("> ", .{});
         try writer.interface.flush();

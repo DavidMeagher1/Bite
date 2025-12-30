@@ -58,7 +58,7 @@ pub fn deinit(self: *Interp) void {
 
 fn innerLoop(self: *Interp) !void {
     while (true) {
-        const param = try self.dict.getParameter(Index.fromInt(self.IP), usize);
+        const param = try self.dict.getExecutionToken(Index.fromInt(self.IP));
         const fn_ptr: PrimitiveFunction = @ptrFromInt(param);
         self.IP += @sizeOf(usize);
         try fn_ptr(self);

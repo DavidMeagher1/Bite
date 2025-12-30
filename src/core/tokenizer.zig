@@ -77,19 +77,52 @@ pub fn next(self: *Tokenizer) ?Result {
                     continue :state .Decimal;
                 },
                 '#' => {
-                    self.seek += 1;
-                    start = self.seek;
-                    continue :state .Decimal;
+                    if (self.seek + 1 < self.end) {
+                        const next_char = buf[self.seek + 1];
+                        switch (next_char) {
+                            '0'...'9' => {
+                                self.seek += 1;
+                                start = self.seek;
+                                continue :state .Decimal;
+                            },
+                            else => {
+                                start = self.seek;
+                                continue :state .Symbol;
+                            },
+                        }
+                    }
                 },
                 '$' => {
-                    self.seek += 1;
-                    start = self.seek;
-                    continue :state .Hex;
+                    if (self.seek + 1 < self.end) {
+                        const next_char = buf[self.seek + 1];
+                        switch (next_char) {
+                            '0'...'9', 'a'...'f', 'A'...'F' => {
+                                self.seek += 1;
+                                start = self.seek;
+                                continue :state .Hex;
+                            },
+                            else => {
+                                start = self.seek;
+                                continue :state .Symbol;
+                            },
+                        }
+                    }
                 },
                 '%' => {
-                    self.seek += 1;
-                    start = self.seek;
-                    continue :state .Binary;
+                    if (self.seek + 1 < self.end) {
+                        const next_char = buf[self.seek + 1];
+                        switch (next_char) {
+                            '0'...'1' => {
+                                self.seek += 1;
+                                start = self.seek;
+                                continue :state .Binary;
+                            },
+                            else => {
+                                start = self.seek;
+                                continue :state .Symbol;
+                            },
+                        }
+                    }
                 },
                 else => {
                     continue :state .Symbol;
@@ -179,6 +212,7 @@ pub fn next(self: *Tokenizer) ?Result {
             }
         },
     }
+    return null;
 }
 
 test "Tokenizer parses symbols and numbers" {
